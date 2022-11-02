@@ -39,6 +39,7 @@ class ClientInterface:
         except Exception as ex:
             print("Couldn't make server request. Make sure a connection has bene established: ", ex)
             return
+        file_size = os.path.getsize(file_name)
         try:
             # Wait for server acknowledgement then send file details
             # Wait for server ok
@@ -48,17 +49,21 @@ class ClientInterface:
             self.communicate(file_name)
             # Wait for server ok then send file size
             self.socket.recv(self.buffer_size)
-            self.socket.send(struct.pack("i", os.path.getsize(file_name)))
+            self.socket.send(struct.pack("i", file_size))
         except Exception as ex:
             print("Error sending file details: ", ex)
         try:
             # Send the file in chunks defined by self.buffer_size
             # Doing it this way allows for unlimited potential file sizes to be sent
+            upload_progress = make_progress(filename=file_name, filesize=file_size)
             l = content.read(self.buffer_size)
-            print("\nSending...")
+
             while l:
+                upload_progress.update(len(l))
                 self.socket.send(l)
                 l = content.read(self.buffer_size)
+
+            upload_progress.update(len(l))
             content.close()
             # Get upload performance details
             upload_time = struct.unpack("f", self.socket.recv(4))[0]
@@ -70,37 +75,40 @@ class ClientInterface:
     def fetch(self):
         # List the files avaliable on the file server
         # Called list_files(), not list() (as in the format of the others) to avoid the standard python function list()
-        print("Requesting files...\n")
+        print("requesting files...\n")
         try:
             # Send list request
             self.communicate(CMDs["fetch"])
         except Exception as ex:
-            print("Couldn't make server request. Make sure a connection has bene established: ", ex)
+            print("couldn't make server request. Make sure a connection has bene established: ", ex)
             return
         try:
             # First get the number of files in the directory
             number_of_files = struct.unpack("i", self.socket.recv(4))[0]
-            print("number: ", number_of_files)
             # Then enter into a loop to recieve details of each, one by one
+            print(f"\tfile size \t \t \t file name")
+            print(f"  -----------------------|----------------------------------------------------------------")
+            
             for i in range(int(number_of_files)):
                 file_name = self.socket.recv(self.buffer_size).decode()
                 self.synchronize()
                 # Also get the file size for each item in the server
                 file_size = struct.unpack("i", self.socket.recv(4))[0]
-                print(f"\t{file_name} - {file_size}b")
+                print(f"\t{short_size(file_size)} \t | \t {file_name}")
                 # Make sure that the client and server are syncronised
                 self.synchronize()
             # Get total size of directory
+            print(f"total files: {number_of_files}")
             total_directory_size = struct.unpack("i", self.socket.recv(4))[0]
-            print(f"Total directory size: {total_directory_size}b")
+            print(f"total directory size: {short_size(total_directory_size)}")
         except Exception as ex:
-            print("Couldn't retrieve listing: ", ex)
+            print("couldn't retrieve listing: ", ex)
             return
         try:
             # Final check
             self.communicate("1")
         except Exception as ex:
-            print("Couldn't get final server confirmation: ", ex)
+            print("couldn't get final server confirmation: ", ex)
 
 
     def synchronize(self):
@@ -125,100 +133,114 @@ class ClientInterface:
             file_size = struct.unpack("i", self.socket.recv(4))[0]
             if file_size == -1:
                 # If file size is -1, the file does not exist
-                print("File does not exist. Make sure the name was entered correctly")
+                print("file does not exist. Make sure the name was entered correctly")
                 return
         except Exception as ex:
-            print("Error checking file: ", ex)
+            print("error checking file: ", ex)
         try:
             # Send ok to recieve file content
             self.synchronize()
             # Enter loop to recieve file
+            download_progress = make_progress(filename=file_name, filesize=file_size)
             with open(f'{self.dir}/{file_name}', "wb") as output_file:
                 bytes_recieved = 0
-                print("\n\tDownloading...")
                 while bytes_recieved < file_size:
                     # Again, file broken into chunks defined by the self.buffer_size variable
                     l = self.socket.recv(self.buffer_size)
+                    download_progress.update(len(l))
                     output_file.write(l)
                     bytes_recieved += self.buffer_size
-            print(f"Successfully downloaded {file_name}")
             # Tell the server that the client is ready to recieve the download performance details
             self.synchronize()
             # Get performance details
             time_elapsed = struct.unpack("f", self.socket.recv(4))[0]
-            print("Time elapsed: %.2fs\nFile size: %db" % (time_elapsed, file_size))
+            print("time elapsed: %.2fs\nFile size: %s" % (time_elapsed, short_size(file_size)))
         except Exception as ex:
-            print("Error downloading file: ", ex)
+            print("error downloading file: ", ex)
 
     def remove(self, file_name):
         # Delete specified file from file server
-        print(f"Deleting file: {file_name}...")
+        print(f"removing file: {file_name}...")
         try:
             # Send resquest, then wait for go-ahead
             self.communicate(CMDs['remove'])
             self.socket.recv(self.buffer_size)
         except Exception as ex:
-            print("Couldn't connect to server. Make sure a connection has been established: ", ex)
+            print("couldn't connect to server. Make sure a connection has been established: ", ex)
             return
         try:
             # Send file name length, then file name
-            self.socket.send(struct.pack("h", sys.getsizeof(file_name)))
             self.communicate(file_name)
+            self.socket.recv(self.buffer_size)
+            self.synchronize()
         except Exception as ex:
-            print("Couldn't send file details: ", ex)
+            print("couldn't send file details: ", ex)
             return
         try:
             # Get conformation that file does/doesn't exist
             file_exists = struct.unpack("i", self.socket.recv(4))[0]
             if file_exists == -1:
-                print("The file does not exist on server: ", ex)
+                print("the file does not exist on server: ")
                 return
-        except:
-            print("Couldn't determine file existance")
+        except Exception as ex:
+            print(f"failure while checking file existence: {ex}!")
             return
+        
+        confirm_delete = '0'
         try:
             # Confirm user wants to delete file
-            confirm_delete = input("Are you sure you want to delete {}? (Y/N)\n".format(file_name)).upper()
             # Make sure input is valid
             # Unfortunately python doesn't have a do while style loop, as that would have been better here
-            while confirm_delete != "Y" and confirm_delete != "N" and confirm_delete != "YES" and confirm_delete != "NO":
+            while confirm_delete != "y" and confirm_delete != "n" and confirm_delete != "yes" and confirm_delete != "no":
                 # If user input is invalid
-                print("Command not recognised, try again")
-                confirm_delete = input("Are you sure you want to delete {}? (Y/N)\n".format(file_name)).upper()
+                confirm_delete = input(f"r u sure to remove {file_name}? y [yes] \t n [no]: ").lower()
+
         except Exception as ex:
-            print("Couldn't confirm deletion status: ", ex)
+            print("couldn't confirm deletion status: ", ex)
             return
         try:
             # Send conformation
-            if confirm_delete == "Y" or confirm_delete == "YES":
+            if confirm_delete[0] == 'y':
+                print(confirm_delete)
                 # User wants to delete file
-                self.communicate("Y")
+                self.communicate("y")
                 # Wait for conformation file has been deleted
                 delete_status = struct.unpack("i", self.socket.recv(4))[0]
                 if delete_status == 1:
-                    print("File successfully deleted!")
+                    print(f"file: {file_name} successfully deleted!")
                 else:
                     # Client will probably send -1 to get here, but an else is used as more of a catch-all
-                    print("File failed to delete!")
+                    print(f"file: {file_name} failed to delete!")
             else:
-                self.communicate("N")
-                print("Delete abandoned by user!: ", ex)
+                self.communicate("n")
+                print("removing cancelled by u!")
         except Exception as ex:
-            print("Couldn't delete file: ", ex)
+            print(f"couldn't delete file because: {ex}!")
 
-    def exit(self):
-        self.communicate(CMDs['exit'])
-        # Wait for server go-ahead
-        self.socket.recv(self.buffer_size)
-        self.socket.close()
-        print("Server connection ended")
 
     def get_menu(self):
-        return '\n\tcommands manual\t\n-----------------------------------------\n%s\t\t: connect to server\n' % CMDs["connect"] + \
-            '%s file_path \t: upload file\t\n%s\t\t: fetch files list\n' % (CMDs["upload"], CMDs["fetch"]) + \
-            '%s file_path \t: download file\t\n%s file_path \t: delete file\n.x           \t: Exit' % (CMDs["download"], CMDs["remove"])
-               
+        return '\n\tcommands manual\t\n-----------------------------------------------------------------------\n%s\t\t: connect to server\n' % CMDs["connect"] + \
+            '%s file_path \t: upload a file\t\n%s\t\t: fetch files list\n' % (CMDs["upload"], CMDs["fetch"]) + \
+            '%s file_path \t: download a file\t\n%s file_path \t: remove a file\n%s           \t: disconnect\n' % (CMDs["download"], CMDs["remove"], CMDs['disconnect']) + \
+            '%s           \t: exit' % (CMDs['exit'])   
 
+    def disconnect(self):
+        try:
+            if self.socket:
+                self.communicate(CMDs['disconnect'])
+                # Wait for server go-ahead
+                self.socket.recv(self.buffer_size)
+                self.socket.close()
+        except:
+            pass
+        finally:
+            print("you are now disconnected!")
+
+    def exit(self):
+        self.disconnect()
+        print("bye bye!")
+        exit(0)
+        
     def process(self, statement):
         try:
             print(statement)
@@ -227,18 +249,28 @@ class ClientInterface:
                 if term[0] == '.': # dot is commands start sign
                     lwrterm = term.lower()
                     if lwrterm == CMDs['connect']:
+                        print("\n----------------------------connection---------------------------------\n ")
                         self.connect()
                     elif lwrterm == CMDs['upload']:
+                        print("\n-------------------------------upload----------------------------------\n ")
                         self.upload(terms[i + 1])
                     elif lwrterm == CMDs['fetch']:
+                        print("\n----------------------------fetch files--------------------------------\n ")
                         self.fetch()
                     elif lwrterm == CMDs['download']:
+                        print("\n-----------------------------download----------------------------------\n ")
                         self.download(terms[i + 1])
                     elif lwrterm == CMDs['remove']:
+                        print("\n------------------------------remove-----------------------------------\n ")
                         self.remove(terms[i + 1])
+                        
+                    elif lwrterm == CMDs['disconnect']:
+                        print("\n----------------------------disconnect---------------------------------\n ")
+                        self.disconnect()
+                        break
+                                            
                     elif lwrterm == CMDs['exit']:
                         self.exit()
-                        break
                     else:
                         print("command not recognised; please try again")
         except Exception as ex:
@@ -249,8 +281,9 @@ class ClientInterface:
 
         # standby:
         while True:
-            statement = input("\n--------------command line----------------\n ")
+            statement = input("\n----------------------------command line--------------------------------\n ")
             self.process(statement)
 
+        
 if __name__ == '__main__':
     ClientInterface().standby()

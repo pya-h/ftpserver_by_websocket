@@ -38,7 +38,7 @@ class Client:
         
         
 class FtpServer:
-    def __init__(self, ip = TCP_IP, port = TCP_PORT, buff_size = BUFFER_SIZE, dir = SERVER_DIR) -> None:
+    def __init__(self, dir = SERVER_DIR, ip = TCP_IP, port = TCP_PORT, buff_size = BUFFER_SIZE) -> None:
         self.port = port
         self.ip = ip
         self.buff_size = buff_size
@@ -48,7 +48,7 @@ class FtpServer:
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((self.ip, self.port))
         self.server.listen(1)
-        print(f"Server started listening on {self.ip}:{self.port}; server is now on stand by for new clients...")
+        print(f"server started listening on {self.ip}:{self.port}; server is now on stand by for new clients...")
 
         while True:
             client_socket, ip_address = self.server.accept()
@@ -83,13 +83,11 @@ class FtpServer:
                 elif data == CMDs['remove']:
                     operation = 'removing'
                     self.remove(client)
-                elif data == CMDs['disconnect']:
-                    self.remove(client)
-                elif data == CMDs['exit'] or not data:
+                elif data == CMDs['disconnect'] or data == CMDs['exit'] or not data:
                     client.disconnect()
-                     
+                    
         except Exception as e:
-            print(f"Something went wrong while {operation} because: ", str(e), "\n\t ... disconnecting...")
+            print(f"something went wrong while {operation} because: ", str(e), "\n\t ... disconnecting...")
             if client:
                 client.disconnect()
                                 
@@ -108,19 +106,20 @@ class FtpServer:
         with open(f'./{self.dir}/{file_name}', "wb") as output_file:
             # This keeps track of how many bytes we have recieved, so we know when to stop the loop
             bytes_recieved = 0
-            print("Recieving...")
+            print(f"recieving {file_name}...")
+            progress = make_progress(filename=file_name, filesize=file_size)
             while bytes_recieved < file_size:
                 l = client.socket.recv(self.buff_size)
                 output_file.write(l)
                 bytes_recieved += self.buff_size
-        print(f"Recieved file: {file_name}")
+                progress.update(len(l))
         # Send upload performance details
         client.socket.send(struct.pack("f", time.time() - start_time))
         client.socket.send(struct.pack("i", file_size))
 
 
     def fetch(self, client):
-        print("Fetching files...")
+        print("fetching files...")
             # Get list of files in directory
         listing = os.listdir(os.getcwd() + f"/{self.dir}")
         # Send over the number of files, so the client knows what to expect (and avoid some errors)
@@ -144,63 +143,69 @@ class FtpServer:
         client.socket.send(struct.pack("i", total_directory_size))
         #Final check
         client.socket.recv(self.buff_size)
-        print("Successfully sent file listing")
+        print("successfully sent files fetch list")
 
     def download(self, client):
         client.synchronize()
         file_name_length = struct.unpack("h", client.socket.recv(2))[0]
         file_name = client.socket.recv(file_name_length).decode()
-        if os.path.isfile(file_name):
+        full_relative_path = f'./{self.dir}/{file_name}'
+        if os.path.isfile(full_relative_path):
             # Then the file exists, and send file size
-            client.socket.send(struct.pack("i", os.path.getsize(file_name)))
+            file_size = os.path.getsize(full_relative_path)
+            client.socket.send(struct.pack("i", file_size))
             # Wait for ok to send file
             client.socket.recv(self.buff_size)
             # Enter loop to send file
             start_time = time.time()
-            print(f"Sending file:{file_name}...")
-            with open(f'./{self.dir}/{file_name}', "rb") as content:
+            print(f"sending file: {file_name}...")
+            progress = make_progress(filename=file_name, filesize=file_size)
+            with open(full_relative_path, "rb") as content:
                 # Again, break into chunks defined by self.buff_size
                 l = content.read(self.buff_size)
                 while l:
+                    progress.update(len(l))
                     client.socket.send(l)
                     l = content.read(self.buff_size)
             # Get client go-ahead, then send download details
+            progress.update(len(l))
             client.socket.recv(self.buff_size)
             client.socket.send(struct.pack("f", time.time() - start_time))
         else:
             # Then the file doesn't exist, and send error code
-            print("File name not valid")
+            print("file name not valid")
             client.socket.send(struct.pack("i", -1))
 
     def remove(self, client):
         # Send go-ahead
         client.synchronize()
         # Get file details
-        file_name_length = struct.unpack("h", client.socket.recv(2))[0]
-        file_name = client.socket.recv(file_name_length)
+        file_name = client.socket.recv(self.buff_size).decode()
+        client.synchronize()
         # Check file exists
         full_path = os.getcwd() + f'/{self.dir}/{file_name}'
+        client.socket.recv(self.buff_size)
         if os.path.isfile(full_path):
             client.socket.send(struct.pack("i", 1))
         else:
             # Then the file doesn't exist
             client.socket.send(struct.pack("i", -1))
         # Wait for deletion conformation
-        confirm_delete = client.socket.recv(self.buff_size)
-        if confirm_delete == "Y":
+        confirm_delete = client.socket.recv(self.buff_size).decode()
+        if confirm_delete == "y":
             try:
                 # Delete file
                 os.remove(full_path)
                 client.socket.send(struct.pack("i", 1))
+                print(f"file {file_name} successfully removed.")
             except:
-                # Unable to delete file
-                print(f"Failed to delete {file_name}")
+                # Something went wrong
+                print(f"failed to remove {file_name}; maybe the file is used by another process?")
                 client.socket.send(struct.pack("i", -1))
         else:
             # User abandoned deletion
             # The server probably recieved "N", but else used as a safety catch-all
-            print("Delete abandoned by client!")
-            return
+            print("removing canceled!")
 
     def end(self):
         # Send quit conformation
@@ -210,4 +215,4 @@ class FtpServer:
 
 
 if __name__ == '__main__':
-    FtpServer().standby()
+    FtpServer(dir = input("enter the relative path of the folder you want to be shared: ") or SERVER_DIR).standby()
