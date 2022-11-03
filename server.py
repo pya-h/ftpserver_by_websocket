@@ -42,7 +42,7 @@ class FtpServer:
         self.port = port
         self.ip = ip
         self.buff_size = buff_size
-        self.dir = dir
+        self.dir = dir if dir != '' else SERVER_DIR
         if not os.path.exists(self.dir):
             os.makedirs(self.dir)
             

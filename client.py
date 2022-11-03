@@ -12,7 +12,7 @@ class ClientInterface:
         self.ip = ip
         self.port = port
         self.buffer_size = buffer_size
-        self.dir = dir
+        self.dir = dir if dir != '' else CLIENT_DIR
         if not os.path.exists(self.dir):
             os.makedirs(self.dir)
                     
@@ -21,7 +21,7 @@ class ClientInterface:
         
     def connect(self):
         try:
-            self.socket.connect((TCP_IP, TCP_PORT))
+            self.socket.connect((self.ip, self.port))
             print("connected successfully")
         except Exception as ex:
             print("connection unsucessful. Make sure the server is online.")
@@ -305,4 +305,4 @@ class ClientInterface:
 
         
 if __name__ == '__main__':
-    ClientInterface().standby()
+    ClientInterface(dir = input("enter the relative path of the folder you want to download files into: ") or CLIENT_DIR).standby()
