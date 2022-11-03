@@ -1,7 +1,7 @@
 import tqdm
 
 TCP_IP = "localhost" # ocal server
-TCP_PORT = 4121
+TCP_PORT = 41923
 BUFFER_SIZE = 1024 # Standard buffer size
 
 CMDs = {'connect': '.$', 'download': '.dl', 'upload': '.+', 'remove': '.-', 'fetch': '...', 'exit': '.x', 'disconnect': '.!'}

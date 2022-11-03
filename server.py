@@ -43,7 +43,9 @@ class FtpServer:
         self.ip = ip
         self.buff_size = buff_size
         self.dir = dir
-        
+        if not os.path.exists(self.dir):
+            os.makedirs(self.dir)
+            
     def standby(self):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((self.ip, self.port))
@@ -97,10 +99,18 @@ class FtpServer:
         # Recieve file name length, then file name
         file_name_size = struct.unpack("h", client.socket.recv(2))[0]
         file_name = client.socket.recv(file_name_size).decode()
+        hierarchy = file_name.split('/')[:-1]
+        current_path = self.dir
+        for folder in hierarchy:
+            current_path += f'/{folder}'
+            if not os.path.exists(current_path):
+                os.makedirs(current_path)
+                
         # Send message to let client know server is ready for document content
         client.synchronize()
         # Recieve file size
         file_size = struct.unpack("i", client.socket.recv(4))[0]
+        
         # Initialise and enter loop to recive file content
         start_time = time.time()
         with open(f'./{self.dir}/{file_name}', "wb") as output_file:
@@ -121,24 +131,35 @@ class FtpServer:
     def fetch(self, client):
         print("fetching files...")
             # Get list of files in directory
-        listing = os.listdir(os.getcwd() + f"/{self.dir}")
+        client.synchronize()
+        base_dir_name_size = struct.unpack("h", client.socket.recv(2))[0]
+        base_dir = client.socket.recv(base_dir_name_size).decode()
+        print(base_dir)
+        target_dir = os.getcwd() + f"/{self.dir}"
+        if base_dir != '?':
+            target_dir += "/" + base_dir
+            print(target_dir)
+        listing = os.listdir(target_dir)
         # Send over the number of files, so the client knows what to expect (and avoid some errors)
         client.socket.send(struct.pack("i", len(listing)))
         total_directory_size = 0
         # Send over the file names and sizes whilst totaling the directory size
         for x in listing:
             # File name size
-            x_path = f"{self.dir}/{x}"
+            x_path = f"{target_dir}/{x}"
             # File name
-            client.socket.send(x.encode())
+            client.socket.send(x.encode('utf-8'))
             client.socket.recv(self.buff_size)
             
             # File content size
-            client.socket.send(struct.pack("i", os.path.getsize(x_path)))
-            total_directory_size += os.path.getsize(x_path)
-            # Make sure that the client and server are syncronised
+            if not os.path.isdir(x_path):
+                file_size = os.path.getsize(x_path)
+                client.socket.send(str(file_size).encode('utf-8'))
+                total_directory_size += file_size
+                # Make sure that the client and server are syncronised
+            else:
+                client.socket.send(b"directory")
             client.socket.recv(self.buff_size)
-            
         # Sum of file sizes in directory
         client.socket.send(struct.pack("i", total_directory_size))
         #Final check
